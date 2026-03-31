@@ -219,7 +219,11 @@ impl FromStr for Message {
             })
             .and_then(|a| <[u8; 20]>::from_hex(a).map_err(|e| e.into()))?;
 
-        lines.next();
+        if lines.next() != Some("") {
+            return Err(ParseError::Format(
+                "Missing blank line after address",
+            ));
+        }
         let statement = match lines.next() {
             None => return Err(ParseError::Format("No lines found after address")),
             Some("") => None,
@@ -230,7 +234,11 @@ impl FromStr for Message {
                         "Statement contains invalid characters",
                     ));
                 }
-                lines.next();
+                if lines.next() != Some("") {
+                    return Err(ParseError::Format(
+                        "Missing blank line after statement",
+                    ));
+                }
                 Some(s.to_string())
             }
         };
@@ -1206,6 +1214,57 @@ Resources:
         eip55(&<[u8; 20]>::from_hex(unprefixed).unwrap()) == checksum
             && eip55(&<[u8; 20]>::from_hex(unprefixed.to_lowercase()).unwrap()) == checksum
             && eip55(&<[u8; 20]>::from_hex(unprefixed.to_uppercase()).unwrap()) == checksum
+    }
+
+    #[test]
+    fn reject_non_empty_separator_lines() {
+        let base = |sep_after_addr: &str, sep_after_stmt: &str| {
+            format!(
+                "service.org wants you to sign in with your Ethereum account:\n\
+                 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\
+                 {sep_after_addr}\n\
+                 I accept the ServiceOrg Terms of Service: https://service.org/tos\n\
+                 {sep_after_stmt}\n\
+                 URI: https://service.org/login\n\
+                 Version: 1\n\
+                 Chain ID: 1\n\
+                 Nonce: 32891756\n\
+                 Issued At: 2021-09-30T16:25:24Z"
+            )
+        };
+
+        // Canonical form parses fine.
+        assert!(Message::from_str(&base("", "")).is_ok());
+
+        // Injected text after address must be rejected.
+        let err = Message::from_str(&base("injected line", "")).unwrap_err();
+        assert!(
+            err.to_string().contains("blank line after address"),
+            "unexpected error: {err}"
+        );
+
+        // Injected text after statement must be rejected.
+        let err = Message::from_str(&base("", "injected line")).unwrap_err();
+        assert!(
+            err.to_string().contains("blank line after statement"),
+            "unexpected error: {err}"
+        );
+
+        // No-statement variant: injected text after address.
+        let no_stmt = "service.org wants you to sign in with your Ethereum account:\n\
+                       0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\
+                       injected\n\
+                       \n\
+                       URI: https://service.org/login\n\
+                       Version: 1\n\
+                       Chain ID: 1\n\
+                       Nonce: 32891756\n\
+                       Issued At: 2021-09-30T16:25:24Z";
+        let err = Message::from_str(no_stmt).unwrap_err();
+        assert!(
+            err.to_string().contains("blank line after address"),
+            "unexpected error: {err}"
+        );
     }
 
     #[cfg(feature = "alloy")]
