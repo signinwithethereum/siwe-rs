@@ -171,6 +171,13 @@ fn parse_line<S: FromStr<Err = E>, E: Into<ParseError>>(
     tagged(tag, line).and_then(|s| S::from_str(s).map_err(|e| e.into()))
 }
 
+fn blank_line(line: Option<&str>, context: &'static str) -> Result<(), ParseError> {
+    match line {
+        Some("") => Ok(()),
+        _ => Err(ParseError::Format(context)),
+    }
+}
+
 fn tag_optional<'a>(
     tag: &'static str,
     line: Option<&'a str>,
@@ -219,11 +226,7 @@ impl FromStr for Message {
             })
             .and_then(|a| <[u8; 20]>::from_hex(a).map_err(|e| e.into()))?;
 
-        if lines.next() != Some("") {
-            return Err(ParseError::Format(
-                "Missing blank line after address",
-            ));
-        }
+        blank_line(lines.next(), "Missing blank line after address")?;
         let statement = match lines.next() {
             None => return Err(ParseError::Format("No lines found after address")),
             Some("") => None,
@@ -234,11 +237,7 @@ impl FromStr for Message {
                         "Statement contains invalid characters",
                     ));
                 }
-                if lines.next() != Some("") {
-                    return Err(ParseError::Format(
-                        "Missing blank line after statement",
-                    ));
-                }
+                blank_line(lines.next(), "Missing blank line after statement")?;
                 Some(s.to_string())
             }
         };
