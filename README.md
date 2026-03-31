@@ -5,7 +5,7 @@ This crate provides a pure Rust implementation of [EIP-4361: Sign In With Ethere
 ## Installation
 
 ```toml
-siwe = "0.7"
+signinwithethereum = "0.7"
 ```
 
 ### Features
@@ -23,7 +23,7 @@ siwe = "0.7"
 Parsing is done via the `Message` implementation of `FromStr`:
 
 ```rust
-# use siwe::Message;
+# use signinwithethereum::Message;
 let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
 let message: Message = msg.parse().unwrap();
 ```
@@ -42,7 +42,7 @@ The parser validates:
 Verification and authentication is performed via EIP-191, using the `address` field of the `Message` as the expected signer. This returns the Ethereum public key of the signer:
 
 ```rust
-# use siwe::Message;
+# use signinwithethereum::Message;
 # use hex::FromHex;
 # let msg = "localhost:4361 wants you to sign in with your Ethereum account:\n0x6Da01670d8fc844e736095918bbE11fE8D564163\n\nSIWE Notepad Example\n\nURI: http://localhost:4361\nVersion: 1\nChain ID: 1\nNonce: kEWepMt9knR6lWJ6A\nIssued At: 2021-12-07T18:28:18.807Z";
 # let message: Message = msg.parse().unwrap();
@@ -53,7 +53,7 @@ let signer: Vec<u8> = message.verify_eip191(&signature).unwrap();
 Time constraints (expiration and not-before) can be validated at current or specific times:
 
 ```rust
-# use siwe::Message;
+# use signinwithethereum::Message;
 # use time::OffsetDateTime;
 # let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
 # let message: Message = msg.parse().unwrap();
@@ -67,7 +67,7 @@ Combined verification of time constraints, field bindings, and authentication ca
 
 ```rust
 # use hex::FromHex;
-# use siwe::{Message, VerificationOpts};
+# use signinwithethereum::{Message, VerificationOpts};
 # use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 # #[tokio::main]
 # async fn main() {
@@ -89,7 +89,7 @@ message.verify(&signature, &opts).await.unwrap();
 `Message` instances serialize as their EIP-4361 string representation via the `Display` trait:
 
 ```rust
-# use siwe::Message;
+# use signinwithethereum::Message;
 # let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
 # let message: Message = msg.parse().unwrap();
 let formatted = message.to_string();
@@ -99,7 +99,7 @@ assert!(formatted.contains("wants you to sign in"));
 EIP-191 Personal-Signature pre-hash signing input:
 
 ```rust
-# use siwe::Message;
+# use signinwithethereum::Message;
 # let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
 # let message: Message = msg.parse().unwrap();
 let eip191_bytes: Vec<u8> = message.eip191_bytes().unwrap();
@@ -108,7 +108,7 @@ let eip191_bytes: Vec<u8> = message.eip191_bytes().unwrap();
 EIP-191 Personal-Signature hash (Keccak-256 of the above):
 
 ```rust
-# use siwe::Message;
+# use signinwithethereum::Message;
 # let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
 # let message: Message = msg.parse().unwrap();
 let eip191_hash: [u8; 32] = message.eip191_hash().unwrap();
@@ -131,7 +131,7 @@ Provide an RPC URL in the verification options. The verification order follows t
 
 ```rust
 use hex::FromHex;
-use siwe::{Message, TimeStamp, VerificationOpts};
+use signinwithethereum::{Message, TimeStamp, VerificationOpts};
 use std::str::FromStr;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -181,4 +181,4 @@ ETH_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" cargo test --feature
 - [EIP-191 Specification](https://eips.ethereum.org/EIPS/eip-191)
 - [EIP-1271 Specification](https://eips.ethereum.org/EIPS/eip-1271)
 - [EIP-6492 Specification](https://eips.ethereum.org/EIPS/eip-6492)
-- [Sign in with Ethereum: TypeScript](https://github.com/ethid-org/siwe)
+- [Sign in with Ethereum: TypeScript](https://github.com/signinwithethereum/siwe)

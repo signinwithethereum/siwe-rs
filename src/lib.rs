@@ -53,7 +53,7 @@ impl FromStr for Version {
 ///
 /// # Example
 /// ```
-/// # use siwe::Message;
+/// # use signinwithethereum::Message;
 /// #
 /// let msg = r#"localhost:4361 wants you to sign in with your Ethereum account:
 /// 0x6Da01670d8fc844e736095918bbE11fE8D564163
@@ -463,7 +463,7 @@ impl Message {
     ///
     /// # Example
     /// ```
-    /// # use siwe::Message;
+    /// # use signinwithethereum::Message;
     /// # use hex::FromHex;
     /// #
     /// # let msg = r#"localhost:4361 wants you to sign in with your Ethereum account:
@@ -515,7 +515,7 @@ impl Message {
     /// # Example
     /// ```
     /// # use hex::FromHex;
-    /// # use siwe::{Message, TimeStamp, VerificationOpts};
+    /// # use signinwithethereum::{Message, TimeStamp, VerificationOpts};
     /// # use std::str::FromStr;
     /// # use time::{format_description::well_known::Rfc3339, OffsetDateTime};
     /// #
@@ -631,7 +631,7 @@ impl Message {
     ///
     /// # Example
     /// ```
-    /// # use siwe::Message;
+    /// # use signinwithethereum::Message;
     /// # use time::OffsetDateTime;
     /// #
     /// # let msg = r#"localhost:4361 wants you to sign in with your Ethereum account:
@@ -661,7 +661,7 @@ impl Message {
     ///
     /// # Example
     /// ```
-    /// # use siwe::Message;
+    /// # use signinwithethereum::Message;
     /// # use time::OffsetDateTime;
     /// #
     /// # let msg = r#"localhost:4361 wants you to sign in with your Ethereum account:
@@ -693,7 +693,7 @@ impl Message {
     ///
     /// # Example
     /// ```
-    /// # use siwe::Message;
+    /// # use signinwithethereum::Message;
     /// #
     /// # let msg = r#"localhost:4361 wants you to sign in with your Ethereum account:
     /// # 0x6Da01670d8fc844e736095918bbE11fE8D564163
@@ -717,7 +717,7 @@ impl Message {
     ///
     /// # Example
     /// ```
-    /// # use siwe::Message;
+    /// # use signinwithethereum::Message;
     /// #
     /// # let msg = r#"localhost:4361 wants you to sign in with your Ethereum account:
     /// # 0x6Da01670d8fc844e736095918bbE11fE8D564163

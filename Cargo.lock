@@ -3389,7 +3389,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "siwe"
+name = "signinwithethereum"
 version = "0.7.0"
 dependencies = [
  "alloy",
