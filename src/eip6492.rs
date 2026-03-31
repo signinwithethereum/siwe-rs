@@ -39,6 +39,8 @@ bf61045b565b604051601f8201601f19908116603f011681016001600160401b0381118282101715
 ///
 /// This handles all three signature types: EIP-6492 (counterfactual wallets),
 /// EIP-1271 (deployed contract wallets), and EOA (ecrecover).
+///
+/// Caller must validate the RPC chain ID matches the message before calling.
 #[cfg(feature = "alloy")]
 pub async fn verify_eip6492(
     address: [u8; 20],

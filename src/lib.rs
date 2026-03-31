@@ -435,6 +435,15 @@ pub enum VerificationError {
     #[error("Contract wallet query failed: {0}")]
     /// Contract wallet or EIP-6492 verification failed unexpectedly.
     ContractCall(String),
+    #[cfg(feature = "alloy")]
+    #[error("RPC chain ID mismatch: message declares chain {expected}, RPC returned chain {actual}")]
+    /// The RPC endpoint serves a different chain than the message declares.
+    RpcChainIdMismatch {
+        /// Message's declared chain ID.
+        expected: u64,
+        /// RPC endpoint's chain ID.
+        actual: u64,
+    },
     #[error("EIP-6492 signature detected but no RPC URL configured")]
     /// An EIP-6492 signature requires an RPC provider for verification.
     RpcRequired,
@@ -583,6 +592,26 @@ impl Message {
         if let Some(s) = &opts.scheme {
             if self.scheme.as_ref() != Some(s) {
                 return Err(VerificationError::SchemeMismatch);
+            }
+        }
+
+        // Validate RPC chain ID matches the message before any on-chain calls.
+        #[cfg(feature = "alloy")]
+        if let Some(rpc_url) = &opts.rpc_url {
+            use alloy::providers::{Provider, ProviderBuilder};
+            let provider = ProviderBuilder::new().connect_http(
+                rpc_url.parse().map_err(|e| {
+                    VerificationError::ContractCall(format!("Invalid RPC URL: {e}"))
+                })?,
+            );
+            let rpc_chain_id = provider.get_chain_id().await.map_err(|e| {
+                VerificationError::ContractCall(format!("Failed to get chain ID: {e}"))
+            })?;
+            if rpc_chain_id != self.chain_id {
+                return Err(VerificationError::RpcChainIdMismatch {
+                    expected: self.chain_id,
+                    actual: rpc_chain_id,
+                });
             }
         }
 
@@ -1177,5 +1206,66 @@ Resources:
         eip55(&<[u8; 20]>::from_hex(unprefixed).unwrap()) == checksum
             && eip55(&<[u8; 20]>::from_hex(unprefixed.to_lowercase()).unwrap()) == checksum
             && eip55(&<[u8; 20]>::from_hex(unprefixed.to_uppercase()).unwrap()) == checksum
+    }
+
+    #[cfg(feature = "alloy")]
+    #[tokio::test]
+    async fn rpc_chain_id_mismatch() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        // Spin up a fake RPC that always returns chain ID 137 (Polygon).
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                // Return chain 137 regardless of request.
+                let body = r#"{"jsonrpc":"2.0","id":1,"result":"0x89"}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        // Message declares chain ID 1, but our RPC returns 137.
+        let message = Message::from_str(
+            r#"localhost:4361 wants you to sign in with your Ethereum account:
+0x6Da01670d8fc844e736095918bbE11fE8D564163
+
+SIWE Notepad Example
+
+URI: http://localhost:4361
+Version: 1
+Chain ID: 1
+Nonce: kEWepMt9knR6lWJ6A
+Issued At: 2021-12-07T18:28:18.807Z"#,
+        )
+        .unwrap();
+
+        let sig = <[u8; 65]>::from_hex(
+            "6228b3ecd7bf2df018183aeab6b6f1db1e9f4e3cbe24560404112e25363540eb\
+             679934908143224d746bbb5e1aa65ab435684081f4dbb74a0fec57f98f40f5051c",
+        )
+        .unwrap();
+
+        let opts = VerificationOpts {
+            rpc_url: Some(format!("http://127.0.0.1:{port}")),
+            ..Default::default()
+        };
+
+        let err = message.verify(&sig, &opts).await.unwrap_err();
+        assert!(
+            matches!(err, VerificationError::RpcChainIdMismatch { expected: 1, actual: 137 }),
+            "expected RpcChainIdMismatch, got: {err:?}"
+        );
     }
 }

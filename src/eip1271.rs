@@ -19,6 +19,8 @@ sol! {
 const MAGIC_VALUE: [u8; 4] = [0x16, 0x26, 0xba, 0x7e];
 
 /// Verify a signature against a deployed contract wallet using EIP-1271.
+///
+/// Caller must validate the RPC chain ID matches the message before calling.
 pub async fn verify_eip1271(
     address: [u8; 20],
     message_hash: [u8; 32],
