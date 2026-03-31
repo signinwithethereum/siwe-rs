@@ -175,6 +175,55 @@ To run tests that require on-chain verification (EIP-1271 / EIP-6492), enable th
 ETH_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" cargo test --features alloy
 ```
 
+## Migrating from `siwe`
+
+This crate is the actively maintained successor to the [`siwe`](https://crates.io/crates/siwe) crate (v0.6), which is no longer maintained.
+
+### Cargo.toml
+
+```diff
+- siwe = "0.6"
++ signinwithethereum = "0.7"
+```
+
+### Code changes
+
+Rename the import:
+
+```diff
+- use siwe::{Message, VerificationOpts};
++ use signinwithethereum::{Message, VerificationOpts};
+```
+
+If you used the `ethers` feature for EIP-1271 contract wallet verification, switch to `alloy`:
+
+```diff
+- siwe = { version = "0.6", features = ["ethers"] }
++ signinwithethereum = { version = "0.7", features = ["alloy"] }
+```
+
+And replace the provider in `VerificationOpts`:
+
+```diff
+  let opts = VerificationOpts {
+-     rpc_provider: Some("https://eth.llamarpc.com".try_into().unwrap()),
++     rpc_url: Some("https://eth.llamarpc.com".into()),
+      ..Default::default()
+  };
+```
+
+The `Message` struct now has a `scheme: Option<String>` field. If you construct `Message` values directly (rather than parsing), add it:
+
+```diff
+  let msg = Message {
++     scheme: None,
+      domain: "example.com".parse().unwrap(),
+      // ...
+  };
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list of breaking changes.
+
 ## See Also
 
 - [EIP-4361 Specification](https://eips.ethereum.org/EIPS/eip-4361)
