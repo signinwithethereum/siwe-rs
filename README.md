@@ -1,80 +1,135 @@
-# Sign-In with Ethereum
+# Sign in with Ethereum
 
-This crate provides a pure Rust implementation of EIP-4361: Sign In With Ethereum.
+This crate provides a pure Rust implementation of [EIP-4361: Sign In With Ethereum](https://eips.ethereum.org/EIPS/eip-4361).
 
 ## Installation
 
-SIWE can be easily installed in any Rust project by including it in said project's `cargo.toml` file:
-
-``` toml
-siwe = "0.6"
+```toml
+siwe = "0.7"
 ```
 
-Features available:
-- `serde` for serialisation/deserialisation support;
-- `ethers` for EIP-1271 compliant contract wallets support; and
-- `typed-builder` for nicer verification options construction.
+### Features
+
+| Feature         | Description                                                                        |
+| --------------- | ---------------------------------------------------------------------------------- |
+| `serde`         | Serialization/deserialization support                                              |
+| `alloy`         | EIP-1271 contract wallet and EIP-6492 counterfactual wallet signature verification |
+| `typed-builder` | Builder pattern for `VerificationOpts`                                             |
 
 ## Usage
-
-SIWE exposes a `Message` struct which implements EIP-4361.
 
 ### Parsing a SIWE Message
 
 Parsing is done via the `Message` implementation of `FromStr`:
 
-``` rust,ignore
-let message: Message = string_message.parse()?;
+```rust
+# use siwe::Message;
+let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
+let message: Message = msg.parse().unwrap();
 ```
 
-### Verifying and Authenticating a SIWE Message
+The parser validates:
 
-Verification and Authentication is performed via EIP-191, using the `address` field of the `Message` as the expected signer. This returns the Ethereum public key of the signer:
+- EIP-55 checksummed address
+- Alphanumeric nonce (minimum 8 characters)
+- RFC 3339 timestamps
+- RFC 3986 URI and domain
+- Optional `scheme://` prefix per EIP-4361
+- Printable ASCII statement (no control characters)
 
-``` rust,ignore
-let signer: Vec<u8> = message.verify_eip191(&signature)?;
+### Verifying a SIWE Message
+
+Verification and authentication is performed via EIP-191, using the `address` field of the `Message` as the expected signer. This returns the Ethereum public key of the signer:
+
+```rust
+# use siwe::Message;
+# use hex::FromHex;
+# let msg = "localhost:4361 wants you to sign in with your Ethereum account:\n0x6Da01670d8fc844e736095918bbE11fE8D564163\n\nSIWE Notepad Example\n\nURI: http://localhost:4361\nVersion: 1\nChain ID: 1\nNonce: kEWepMt9knR6lWJ6A\nIssued At: 2021-12-07T18:28:18.807Z";
+# let message: Message = msg.parse().unwrap();
+# let signature = <[u8; 65]>::from_hex("6228b3ecd7bf2df018183aeab6b6f1db1e9f4e3cbe24560404112e25363540eb679934908143224d746bbb5e1aa65ab435684081f4dbb74a0fec57f98f40f5051c").unwrap();
+let signer: Vec<u8> = message.verify_eip191(&signature).unwrap();
 ```
 
-The time constraints (expiry and not-before) can also be validated, at current or particular times:
+Time constraints (expiration and not-before) can be validated at current or specific times:
 
-``` rust,ignore
-if message.valid_now() { ... };
+```rust
+# use siwe::Message;
+# use time::OffsetDateTime;
+# let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
+# let message: Message = msg.parse().unwrap();
+assert!(message.valid_now());
 
 // equivalent to
-if message.valid_at(&OffsetDateTime::now_utc()) { ... };
+assert!(message.valid_at(&OffsetDateTime::now_utc()));
 ```
 
-Combined verification of time constraints and authentication can be done in a single call with `verify`:
+Combined verification of time constraints, field bindings, and authentication can be done in a single call with `verify`:
 
-``` rust,ignore
-message.verify(&signature).await?;
+```rust
+# use hex::FromHex;
+# use siwe::{Message, VerificationOpts};
+# use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+# #[tokio::main]
+# async fn main() {
+# let msg = "localhost:4361 wants you to sign in with your Ethereum account:\n0x6Da01670d8fc844e736095918bbE11fE8D564163\n\nSIWE Notepad Example\n\nURI: http://localhost:4361\nVersion: 1\nChain ID: 1\nNonce: kEWepMt9knR6lWJ6A\nIssued At: 2021-12-07T18:28:18.807Z";
+# let message: Message = msg.parse().unwrap();
+# let signature = <[u8; 65]>::from_hex("6228b3ecd7bf2df018183aeab6b6f1db1e9f4e3cbe24560404112e25363540eb679934908143224d746bbb5e1aa65ab435684081f4dbb74a0fec57f98f40f5051c").unwrap();
+let opts = VerificationOpts {
+    domain: Some("localhost:4361".parse().unwrap()),
+    nonce: Some("kEWepMt9knR6lWJ6A".into()),
+    timestamp: Some(OffsetDateTime::parse("2021-12-08T00:00:00Z", &Rfc3339).unwrap()),
+    ..Default::default()
+};
+message.verify(&signature, &opts).await.unwrap();
+# }
 ```
 
-### Serialization of a SIWE Message
+### Serialization
 
-`Message` instances can also be serialized as their EIP-4361 string representations via the `Display` implementation of `Message`:
+`Message` instances serialize as their EIP-4361 string representation via the `Display` trait:
 
-``` rust,ignore
-println!("{}", &message);
+```rust
+# use siwe::Message;
+# let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
+# let message: Message = msg.parse().unwrap();
+let formatted = message.to_string();
+assert!(formatted.contains("wants you to sign in"));
 ```
 
-As well as in EIP-191 Personal-Signature pre-hash signing input form (if your Ethereum wallet does not support EIP-191 directly):
+EIP-191 Personal-Signature pre-hash signing input:
 
-``` rust,ignore
-let eip191_bytes: Vec<u8> = message.eip191_bytes()?;
+```rust
+# use siwe::Message;
+# let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
+# let message: Message = msg.parse().unwrap();
+let eip191_bytes: Vec<u8> = message.eip191_bytes().unwrap();
 ```
 
-And directly as the EIP-191 Personal-Signature Hashed signing-input (made over the `.eip191_string` output):
+EIP-191 Personal-Signature hash (Keccak-256 of the above):
 
-``` rust,ignore
-let eip191_hash: [u8; 32] = message.eip191_hash()?;
+```rust
+# use siwe::Message;
+# let msg = "example.com wants you to sign in with your Ethereum account:\n0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z";
+# let message: Message = msg.parse().unwrap();
+let eip191_hash: [u8; 32] = message.eip191_hash().unwrap();
 ```
+
+### Smart Contract Wallets (EIP-1271 / EIP-6492)
+
+With the `alloy` feature enabled, `verify()` supports:
+
+- **EIP-1271** -- signature verification for deployed contract wallets (e.g. Safe, Argent)
+- **EIP-6492** -- signature verification for counterfactual (not yet deployed) contract wallets
+
+Provide an RPC URL in the verification options. The verification order follows the EIP-6492 specification:
+
+1. **EIP-6492** -- if the signature has the magic suffix, verify via the universal off-chain validator
+2. **EOA** -- try standard `ecrecover` for 65-byte signatures
+3. **EIP-1271** -- fall back to on-chain `isValidSignature` if EOA verification fails
 
 ## Example
 
-Parsing and verifying a `Message` is easy:
-
-``` rust
+```rust
 use hex::FromHex;
 use siwe::{Message, TimeStamp, VerificationOpts};
 use std::str::FromStr;
@@ -103,22 +158,27 @@ Issued At: 2021-12-07T18:28:18.807Z"#;
     };
 
     if let Err(e) = message.verify(&signature, &verification_opts).await {
-        // message cannot be correctly authenticated at this time
+        println!("Verification failed: {e}");
     }
-
-    // do application-specific things
 }
 ```
 
-## Disclaimer
+## Testing
 
-Our Rust library for Sign-In with Ethereum has not yet undergone a formal security
-audit. We welcome continued feedback on the usability, architecture, and security
-of this implementation.
+```bash
+cargo test
+```
+
+To run tests that require on-chain verification (EIP-1271 / EIP-6492), enable the `alloy` feature and provide an Ethereum mainnet RPC URL:
+
+```bash
+ETH_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" cargo test --features alloy
+```
 
 ## See Also
 
-- [Sign-In with Ethereum: TypeScript](https://github.com/spruceid/siwe)
-- [Example SIWE application: login.xyz](https://login.xyz)
-- [EIP-4361 Specification Draft](https://eips.ethereum.org/EIPS/eip-4361)
+- [EIP-4361 Specification](https://eips.ethereum.org/EIPS/eip-4361)
 - [EIP-191 Specification](https://eips.ethereum.org/EIPS/eip-191)
+- [EIP-1271 Specification](https://eips.ethereum.org/EIPS/eip-1271)
+- [EIP-6492 Specification](https://eips.ethereum.org/EIPS/eip-6492)
+- [Sign in with Ethereum: TypeScript](https://github.com/ethid-org/siwe)

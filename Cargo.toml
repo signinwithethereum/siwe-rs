@@ -1,11 +1,11 @@
 [package]
 name = "siwe"
-version = "0.6.1"
-authors = ["Spruce Systems, Inc."]
-edition = "2018"
+version = "0.7.0"
+authors = ["Spruce Systems, Inc.", "EthID.org"]
+edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Rust implementation of EIP-4361: Sign In With Ethereum"
-repository = "https://github.com/spruceid/siwe-rs/"
+repository = "https://github.com/signinwithethereum/siwe-rs"
 exclude = ["tests", ".github"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -20,12 +20,17 @@ k256 = { version = "0.13", default-features = false, features = [
 ] }
 sha3 = "0.10.8"
 time = { version = "0.3", features = ["parsing", "formatting"] }
-thiserror = "1.0"
+thiserror = "2"
 http = "1.0.0"
-rand = "0.8.5"
+rand = "0.10"
 serde = { version = "1.0.164", optional = true }
-ethers = { version = "2.0.7", optional = true }
-typed-builder = { version = "0.14.0", optional = true }
+alloy = { version = "1", optional = true, features = [
+    "provider-http",
+    "sol-types",
+    "rpc-types",
+    "network",
+] }
+typed-builder = { version = "0.23", optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"

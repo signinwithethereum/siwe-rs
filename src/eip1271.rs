@@ -1,68 +1,48 @@
-use std::collections::BTreeMap;
+//! EIP-1271 smart contract wallet signature verification.
 
-use ethers::{
-    abi::{Abi, Function, Param, ParamType, StateMutability},
-    contract::{AbiError, ContractInstance},
-    prelude::*,
+use alloy::{
+    primitives::{Address, Bytes, FixedBytes},
+    providers::{Provider, ProviderBuilder},
+    rpc::types::TransactionRequest,
+    sol,
+    sol_types::SolCall,
 };
 
 use crate::VerificationError;
 
-const METHOD_NAME: &str = "isValidSignature";
+sol! {
+    /// EIP-1271 `isValidSignature` interface.
+    function isValidSignature(bytes32 _hash, bytes memory _signature) external view returns (bytes4);
+}
 
+/// EIP-1271 magic return value indicating a valid signature.
+const MAGIC_VALUE: [u8; 4] = [0x16, 0x26, 0xba, 0x7e];
+
+/// Verify a signature against a deployed contract wallet using EIP-1271.
 pub async fn verify_eip1271(
     address: [u8; 20],
-    message_hash: &[u8; 32],
+    message_hash: [u8; 32],
     signature: &[u8],
-    provider: &Provider<Http>,
+    rpc_url: &str,
 ) -> Result<bool, VerificationError> {
-    #[allow(deprecated)]
-    let abi = Abi {
-        constructor: None,
-        functions: BTreeMap::from([(
-            METHOD_NAME.to_string(),
-            vec![Function {
-                name: METHOD_NAME.to_string(),
-                inputs: vec![
-                    Param {
-                        name: " _message".to_string(),
-                        kind: ParamType::FixedBytes(32),
-                        internal_type: Some("bytes32".to_string()),
-                    },
-                    Param {
-                        name: " _signature".to_string(),
-                        kind: ParamType::Bytes,
-                        internal_type: Some("bytes".to_string()),
-                    },
-                ],
-                outputs: vec![Param {
-                    name: "".to_string(),
-                    kind: ParamType::FixedBytes(4),
-                    internal_type: Some("bytes4".to_string()),
-                }],
-                constant: None,
-                state_mutability: StateMutability::View,
-            }],
-        )]),
-        events: BTreeMap::new(),
-        errors: BTreeMap::new(),
-        receive: false,
-        fallback: false,
+    let provider = ProviderBuilder::new().connect_http(
+        rpc_url
+            .parse()
+            .map_err(|e| VerificationError::ContractCall(format!("Invalid RPC URL: {e}")))?,
+    );
+
+    let call = isValidSignatureCall {
+        _hash: FixedBytes::from(message_hash),
+        _signature: Bytes::copy_from_slice(signature),
     };
 
-    let contract = ContractInstance::<&Provider<Http>, Provider<Http>>::new(address, abi, provider);
+    let tx = TransactionRequest::default()
+        .to(Address::from(address))
+        .input(Bytes::from(call.abi_encode()).into());
 
-    match contract
-        .method::<_, [u8; 4]>(
-            METHOD_NAME,
-            (*message_hash, Bytes::from(signature.to_owned())),
-        )
-        .unwrap()
-        .call()
-        .await
-    {
-        Ok(r) => Ok(r == [22, 38, 186, 126]),
-        Err(ContractError::AbiError(AbiError::DecodingError(_))) => Ok(false),
-        Err(e) => Err(VerificationError::ContractCall(e.to_string())),
+    match provider.call(tx).await {
+        Ok(result) => Ok(result.len() >= 4 && result[..4] == MAGIC_VALUE),
+        // Decoding failures (e.g. contract doesn't implement EIP-1271) → not valid
+        Err(_) => Ok(false),
     }
 }

@@ -2,10 +2,11 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg), feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 
+mod eip6492;
 mod nonce;
 mod rfc3339;
 
-#[cfg(feature = "ethers")]
+#[cfg(feature = "alloy")]
 mod eip1271;
 
 use ::core::{
@@ -18,12 +19,8 @@ use http::uri::{Authority, InvalidUri};
 use iri_string::types::UriString;
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use sha3::{Digest, Keccak256};
-use std::convert::{TryFrom, TryInto};
 use thiserror::Error;
 use time::OffsetDateTime;
-
-#[cfg(feature = "ethers")]
-use ethers::prelude::*;
 
 #[cfg(feature = "serde")]
 use serde::{
@@ -72,6 +69,8 @@ impl FromStr for Version {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
+    /// Optional URI scheme of the request origin (e.g. "https").
+    pub scheme: Option<String>,
     /// The RFC 3986 authority that is requesting the signing.
     pub domain: Authority,
     /// The Ethereum address performing the signing conformant to capitalization encoded checksum specified in EIP-55 where applicable.
@@ -100,6 +99,9 @@ pub struct Message {
 
 impl Display for Message {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        if let Some(scheme) = &self.scheme {
+            write!(f, "{}://", scheme)?;
+        }
         writeln!(f, "{}{}", &self.domain, PREAMBLE)?;
         writeln!(f, "{}", eip55(&self.address))?;
         writeln!(f)?;
@@ -183,11 +185,30 @@ impl FromStr for Message {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut lines = s.split('\n');
-        let domain = lines
+        let preamble_prefix = lines
             .next()
             .and_then(|preamble| preamble.strip_suffix(PREAMBLE))
-            .map(Authority::from_str)
-            .ok_or(ParseError::Format("Missing Preamble Line"))??;
+            .ok_or(ParseError::Format("Missing Preamble Line"))?;
+
+        // Parse optional scheme://domain prefix per EIP-4361 ABNF.
+        let (scheme, domain) = if let Some((scheme_part, rest)) = preamble_prefix.split_once("://")
+        {
+            // Validate scheme: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+            if !scheme_part
+                .bytes()
+                .next()
+                .map(|b| b.is_ascii_alphabetic())
+                .unwrap_or(false)
+                || !scheme_part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.')
+            {
+                return Err(ParseError::Format("Invalid scheme"));
+            }
+            (Some(scheme_part.to_string()), Authority::from_str(rest)?)
+        } else {
+            (None, Authority::from_str(preamble_prefix)?)
+        };
         let address = tagged(ADDR_TAG, lines.next())
             .and_then(|a| {
                 if is_checksum(a) {
@@ -198,12 +219,17 @@ impl FromStr for Message {
             })
             .and_then(|a| <[u8; 20]>::from_hex(a).map_err(|e| e.into()))?;
 
-        // Skip the new line:
         lines.next();
         let statement = match lines.next() {
             None => return Err(ParseError::Format("No lines found after address")),
             Some("") => None,
             Some(s) => {
+                // EIP-4361: statement may only contain printable ASCII (0x20-0x7E).
+                if !s.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+                    return Err(ParseError::Format(
+                        "Statement contains invalid characters",
+                    ));
+                }
                 lines.next();
                 Some(s.to_string())
             }
@@ -214,7 +240,9 @@ impl FromStr for Message {
         let chain_id = parse_line(CHAIN_TAG, lines.next())?;
         let nonce = parse_line(NONCE_TAG, lines.next()).and_then(|nonce: String| {
             if nonce.len() < 8 {
-                Err(ParseError::Format("Nonce must be longer than 8 characters"))
+                Err(ParseError::Format("Nonce must be at least 8 characters"))
+            } else if !nonce.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                Err(ParseError::Format("Nonce must be alphanumeric"))
             } else {
                 Ok(nonce)
             }
@@ -252,6 +280,7 @@ impl FromStr for Message {
         }?;
 
         Ok(Message {
+            scheme,
             domain,
             address,
             statement,
@@ -342,9 +371,15 @@ typed_builder_doc! {
         pub nonce: Option<String>,
         /// Datetime for which the message should be valid at.
         pub timestamp: Option<OffsetDateTime>,
-        #[cfg(feature = "ethers")]
-        /// RPC Provider used for on-chain checks. Necessary for contract wallets signatures.
-        pub rpc_provider: Option<Provider<Http>>,
+        /// Expected URI field.
+        pub uri: Option<UriString>,
+        /// Expected chain ID.
+        pub chain_id: Option<u64>,
+        /// Expected scheme field.
+        pub scheme: Option<String>,
+        #[cfg(feature = "alloy")]
+        /// RPC URL for on-chain checks (EIP-1271/EIP-6492 contract wallet signatures).
+        pub rpc_url: Option<String>,
     }
 }
 
@@ -357,8 +392,11 @@ impl Default for VerificationOpts {
             domain: None,
             nonce: None,
             timestamp: None,
-            #[cfg(feature = "ethers")]
-            rpc_provider: None,
+            uri: None,
+            chain_id: None,
+            scheme: None,
+            #[cfg(feature = "alloy")]
+            rpc_url: None,
         }
     }
 }
@@ -367,16 +405,16 @@ impl Default for VerificationOpts {
 /// Reasons for the verification of a signed message to fail.
 pub enum VerificationError {
     #[error(transparent)]
-    /// Signature is not a valid k256 signature (it can be returned if the contract wallet verification failed or is not enabled).
+    /// Signature is not a valid k256 signature.
     Crypto(#[from] k256::ecdsa::Error),
     #[error(transparent)]
     /// Message failed to be serialized.
     Serialization(#[from] fmt::Error),
-    #[error("Recovered key does not match address or contract wallet support is not enabled.")]
-    /// Catch-all for invalid signature (it can be returned if contract wallet support is not enabled).
+    #[error("Recovered key does not match address")]
+    /// Recovered address does not match the message address.
     Signer,
     #[error("Message is not currently valid")]
-    /// Message is not currently valid.
+    /// Message is not currently valid (expired or not yet valid).
     Time,
     #[error("Message domain does not match")]
     /// Expected message domain does not match.
@@ -384,13 +422,24 @@ pub enum VerificationError {
     #[error("Message nonce does not match")]
     /// Expected message nonce does not match.
     NonceMismatch,
-    #[cfg(feature = "ethers")]
-    // Using a String because the original type requires a lifetime.
+    #[error("Message URI does not match")]
+    /// Expected message URI does not match.
+    UriMismatch,
+    #[error("Message chain ID does not match")]
+    /// Expected message chain ID does not match.
+    ChainIdMismatch,
+    #[error("Message scheme does not match")]
+    /// Expected message scheme does not match.
+    SchemeMismatch,
+    #[cfg(feature = "alloy")]
     #[error("Contract wallet query failed: {0}")]
-    /// Contract wallet verification failed unexpectedly.
+    /// Contract wallet or EIP-6492 verification failed unexpectedly.
     ContractCall(String),
-    #[error("The signature is not 65 bytes long. It might mean that it is a EIP1271 signature and you have the `ethers` feature disabled or configured a provider.")]
-    /// The signature is not 65 bytes long. It might mean that it is a EIP1271 signature and you have the `ethers` feature disabled or configured a provider.
+    #[error("EIP-6492 signature detected but no RPC URL configured")]
+    /// An EIP-6492 signature requires an RPC provider for verification.
+    RpcRequired,
+    #[error("The signature length is invalid for EOA verification and contract wallet support is not enabled")]
+    /// The signature is not 65 bytes and the `alloy` feature is not enabled.
     SignatureLength,
 }
 
@@ -452,27 +501,12 @@ impl Message {
         }
     }
 
-    #[cfg(feature = "ethers")]
-    /// Verify the integrity of a, potentially, EIP-1271 signed message.
+    /// Validates time constraints and integrity of the object by matching its signature.
     ///
-    /// # Arguments
-    /// - `sig` - Signature of the message signed by the wallet.
-    /// - `provider` - Provider used to query the chain.
-    ///
-    /// # Example (find a provider at https://ethereumnodes.com/)
-    /// ```ignore
-    /// let is_valid: bool = message.verify_eip1271(&signature, "https://provider.example.com/".try_into().unwrap())?;
-    /// ```
-    pub async fn verify_eip1271(
-        &self,
-        sig: &[u8],
-        provider: &Provider<Http>,
-    ) -> Result<bool, VerificationError> {
-        let hash = Keccak256::new_with_prefix(self.eip191_bytes().unwrap()).finalize();
-        eip1271::verify_eip1271(self.address, hash.as_ref(), sig, provider).await
-    }
-
-    /// Validates time constraints and integrity of the object by matching it's signature.
+    /// Verification order follows EIP-6492:
+    /// 1. EIP-6492 (counterfactual wallets) — if magic suffix detected
+    /// 2. EOA (ecrecover via EIP-191) — for standard 65-byte signatures
+    /// 3. EIP-1271 (deployed contract wallets) — fallback if EOA fails
     ///
     /// # Arguments
     /// - `sig` - Signature of the message signed by the wallet
@@ -515,36 +549,82 @@ impl Message {
         sig: &[u8],
         opts: &VerificationOpts,
     ) -> Result<(), VerificationError> {
-        match (
-            opts.timestamp
-                .as_ref()
-                .map(|t| self.valid_at(t))
-                .unwrap_or_else(|| self.valid_now()),
-            opts.domain.as_ref(),
-            opts.nonce.as_ref(),
-        ) {
-            (false, _, _) => return Err(VerificationError::Time),
-            (_, Some(d), _) if *d != self.domain => return Err(VerificationError::DomainMismatch),
-            (_, _, Some(n)) if *n != self.nonce => return Err(VerificationError::NonceMismatch),
-            _ => (),
-        };
+        // Time validation
+        let time_valid = opts
+            .timestamp
+            .as_ref()
+            .map(|t| self.valid_at(t))
+            .unwrap_or_else(|| self.valid_now());
+        if !time_valid {
+            return Err(VerificationError::Time);
+        }
 
-        let res = if sig.len() == 65 {
+        // Binding checks
+        if let Some(d) = &opts.domain {
+            if *d != self.domain {
+                return Err(VerificationError::DomainMismatch);
+            }
+        }
+        if let Some(n) = &opts.nonce {
+            if *n != self.nonce {
+                return Err(VerificationError::NonceMismatch);
+            }
+        }
+        if let Some(u) = &opts.uri {
+            if *u != self.uri {
+                return Err(VerificationError::UriMismatch);
+            }
+        }
+        if let Some(c) = &opts.chain_id {
+            if *c != self.chain_id {
+                return Err(VerificationError::ChainIdMismatch);
+            }
+        }
+        if let Some(s) = &opts.scheme {
+            if self.scheme.as_ref() != Some(s) {
+                return Err(VerificationError::SchemeMismatch);
+            }
+        }
+
+        // Step 1: EIP-6492 — if signature has the magic suffix, use the universal validator.
+        if eip6492::is_eip6492_signature(sig) {
+            #[cfg(feature = "alloy")]
+            {
+                let rpc_url = opts
+                    .rpc_url
+                    .as_deref()
+                    .ok_or(VerificationError::RpcRequired)?;
+                let hash = self.eip191_hash()?;
+                return if eip6492::verify_eip6492(self.address, hash, sig, rpc_url).await? {
+                    Ok(())
+                } else {
+                    Err(VerificationError::Signer)
+                };
+            }
+            #[cfg(not(feature = "alloy"))]
+            return Err(VerificationError::RpcRequired);
+        }
+
+        // Step 2: EOA — try standard ecrecover for 65-byte signatures.
+        let eoa_result = if sig.len() == 65 {
             self.verify_eip191(sig.try_into().unwrap())
         } else {
             Err(VerificationError::SignatureLength)
         };
 
-        #[cfg(feature = "ethers")]
-        if let Err(e) = res {
-            if let Some(provider) = &opts.rpc_provider {
-                if self.verify_eip1271(sig, provider).await? {
+        // Step 3: EIP-1271 fallback — if EOA failed and we have an RPC URL, try contract wallet.
+        #[cfg(feature = "alloy")]
+        if let Err(eoa_err) = eoa_result {
+            if let Some(rpc_url) = &opts.rpc_url {
+                let hash = self.eip191_hash()?;
+                if eip1271::verify_eip1271(self.address, hash, sig, rpc_url).await? {
                     return Ok(());
                 }
             }
-            return Err(e);
+            return Err(eoa_err);
         }
-        res.map(|_| ())
+
+        eoa_result.map(|_| ())
     }
 
     /// Validates the time constraints of the message at current time.
@@ -598,11 +678,14 @@ impl Message {
     /// assert!(message.valid_at(&OffsetDateTime::now_utc()));
     /// ```
     pub fn valid_at(&self, t: &OffsetDateTime) -> bool {
-        self.not_before.as_ref().map(|nbf| nbf < t).unwrap_or(true)
+        self.not_before
+            .as_ref()
+            .map(|nbf| nbf <= t)
+            .unwrap_or(true)
             && self
                 .expiration_time
                 .as_ref()
-                .map(|exp| exp >= t)
+                .map(|exp| exp > t)
                 .unwrap_or(true)
     }
 
@@ -688,7 +771,6 @@ mod tests {
     use time::format_description::well_known::Rfc3339;
 
     use super::*;
-    use std::convert::TryInto;
 
     #[test]
     fn parsing() {
@@ -803,12 +885,13 @@ Resources:
         include_str!("../tests/siwe/test/verification_positive.json");
     const VERIFICATION_NEGATIVE: &str =
         include_str!("../tests/siwe/test/verification_negative.json");
-    #[cfg(feature = "ethers")]
+    #[cfg(feature = "alloy")]
     const VERIFICATION_EIP1271: &str = include_str!("../tests/siwe/test/eip1271.json");
 
     fn fields_to_message(fields: &serde_json::Value) -> anyhow::Result<Message> {
         let fields = fields.as_object().unwrap();
         Ok(Message {
+            scheme: fields.get("scheme").and_then(|s| s.as_str()).map(String::from),
             domain: fields["domain"].as_str().unwrap().try_into().unwrap(),
             address: <[u8; 20]>::from_hex(
                 fields["address"]
@@ -914,7 +997,7 @@ Resources:
         }
     }
 
-    #[cfg(feature = "ethers")]
+    #[cfg(feature = "alloy")]
     #[tokio::test]
     async fn verification_eip1271() {
         let tests: serde_json::Value = serde_json::from_str(VERIFICATION_EIP1271).unwrap();
@@ -929,8 +1012,10 @@ Resources:
                     .unwrap(),
             )
             .unwrap();
+            let rpc_url = std::env::var("ETH_RPC_URL")
+                .expect("ETH_RPC_URL must be set to run EIP-1271 tests");
             let opts = VerificationOpts {
-                rpc_provider: Some("https://eth.llamarpc.com".try_into().unwrap()),
+                rpc_url: Some(rpc_url),
                 ..Default::default()
             };
             assert!(message.verify(&signature, &opts).await.is_ok());
