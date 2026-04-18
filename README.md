@@ -212,12 +212,14 @@ And replace the provider in `VerificationOpts`:
   };
 ```
 
-The `Message` struct now has `scheme: Option<String>` and `warnings: Vec<String>` fields. If you construct `Message` values directly (rather than parsing), add them:
+The `Message` struct now has `scheme: Option<String>`, `address_raw: Option<String>`, and `warnings: Vec<String>` fields. If you construct `Message` values directly (rather than parsing), add them:
 
 ```diff
   let msg = Message {
 +     scheme: None,
       domain: "example.com".parse().unwrap(),
+      address: [/* 20 bytes */],
++     address_raw: None,
       // ...
 +     warnings: vec![],
   };

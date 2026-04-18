@@ -75,6 +75,8 @@ pub struct Message {
     pub domain: Authority,
     /// The Ethereum address performing the signing. Parsed addresses must be EIP-55 checksummed or uniform-case (all-lowercase/all-uppercase); unchecksummed addresses produce a warning.
     pub address: [u8; 20],
+    /// Raw address hex digits (no `0x` prefix) exactly as they appeared in the parsed message, set only when the input was not EIP-55 checksummed (uniform-case). When `Some`, `Display` emits this string verbatim so that the EIP-191 hash matches what the signer actually signed. Must encode the same 20 bytes as `address`; keep `None` for directly-constructed messages (the canonical checksum form is used).
+    pub address_raw: Option<String>,
     /// A human-readable ASCII assertion that the user will sign, and it must not contain '\n' (the byte 0x0a).
     pub statement: Option<String>,
     /// An RFC 3986 URI referring to the resource that is the subject of the signing (as in the subject of a claim).
@@ -104,6 +106,7 @@ impl PartialEq for Message {
         self.scheme == other.scheme
             && self.domain == other.domain
             && self.address == other.address
+            && self.address_raw == other.address_raw
             && self.statement == other.statement
             && self.uri == other.uri
             && self.version == other.version
@@ -123,7 +126,10 @@ impl Display for Message {
             write!(f, "{}://", scheme)?;
         }
         writeln!(f, "{}{}", &self.domain, PREAMBLE)?;
-        writeln!(f, "{}", eip55(&self.address))?;
+        match &self.address_raw {
+            Some(raw) => writeln!(f, "0x{}", raw)?,
+            None => writeln!(f, "{}", eip55(&self.address))?,
+        }
         writeln!(f)?;
         if let Some(statement) = &self.statement {
             writeln!(f, "{}", statement)?;
@@ -245,12 +251,15 @@ impl FromStr for Message {
         if has_lower && has_upper && !is_checksum(address_str) {
             return Err(ParseError::Format("Address is not in EIP-55 format"));
         }
-        if (has_lower || has_upper) && !(has_lower && has_upper) {
+        let address_raw = if (has_lower || has_upper) && !(has_lower && has_upper) {
             warnings.push(format!(
                 "Address is not EIP-55 checksummed: 0x{}",
                 address_str
             ));
-        }
+            Some(address_str.to_string())
+        } else {
+            None
+        };
         let address = <[u8; 20]>::from_hex(address_str)?;
 
         blank_line(lines.next(), "Missing blank line after address")?;
@@ -328,6 +337,7 @@ impl FromStr for Message {
             scheme,
             domain,
             address,
+            address_raw,
             statement,
             uri,
             version,

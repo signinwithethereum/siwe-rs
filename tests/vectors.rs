@@ -38,22 +38,34 @@ const OBJECT_MESSAGE_OBJECTS: &str =
 const OBJECT_PARSING_NEGATIVE: &str =
     include_str!("../test-vectors/vectors/objects/parsing_negative_objects.json");
 
+/// Returns the hex string verbatim when the input is not EIP-55 checksummed
+/// (uniform-case), so that `Message::address_raw` is set consistently with what
+/// the parser would populate from an equivalent message string.
+fn unchecksummed_raw(address_hex: &str) -> Option<String> {
+    let has_lower = address_hex.bytes().any(|b| matches!(b, b'a'..=b'f'));
+    let has_upper = address_hex.bytes().any(|b| matches!(b, b'A'..=b'F'));
+    if (has_lower || has_upper) && !(has_lower && has_upper) {
+        Some(address_hex.to_string())
+    } else {
+        None
+    }
+}
+
 fn fields_to_message(fields: &serde_json::Value) -> anyhow::Result<Message> {
     let fields = fields.as_object().unwrap();
+    let address_hex = fields["address"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("0x")
+        .unwrap();
     Ok(Message {
         scheme: fields
             .get("scheme")
             .and_then(|s| s.as_str())
             .map(String::from),
         domain: fields["domain"].as_str().unwrap().try_into().unwrap(),
-        address: <[u8; 20]>::from_hex(
-            fields["address"]
-                .as_str()
-                .unwrap()
-                .strip_prefix("0x")
-                .unwrap(),
-        )
-        .unwrap(),
+        address: <[u8; 20]>::from_hex(address_hex).unwrap(),
+        address_raw: unchecksummed_raw(address_hex),
         statement: fields
             .get("statement")
             .map(|s| s.as_str().unwrap().try_into().unwrap()),
@@ -128,6 +140,7 @@ fn try_message_from_object(obj: &serde_json::Value) -> Result<Message, String> {
             address_str
         ));
     }
+    let address_raw = unchecksummed_raw(address_hex);
     let address =
         <[u8; 20]>::from_hex(address_hex).map_err(|_| "invalid address hex".to_string())?;
 
@@ -214,6 +227,7 @@ fn try_message_from_object(obj: &serde_json::Value) -> Result<Message, String> {
         scheme: None,
         domain,
         address,
+        address_raw,
         statement,
         uri,
         version,

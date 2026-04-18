@@ -211,6 +211,68 @@ fn test_eip55(addr: &str, checksum: &str) -> bool {
 }
 
 #[test]
+fn roundtrip_preserves_unchecksummed_lowercase_address() {
+    let msg = "service.org wants you to sign in with your Ethereum account:\n\
+0x4a62316623ad457f02cdc5d997ded67a383ec569\n\
+\n\
+I accept the ServiceOrg Terms of Service: https://service.org/tos\n\
+\n\
+URI: https://service.org/login\n\
+Version: 1\n\
+Chain ID: 1\n\
+Nonce: abcd1234efgh5678\n\
+Issued At: 2026-01-01T00:00:00Z";
+    let parsed = Message::from_str(msg).unwrap();
+    assert_eq!(parsed.warnings.len(), 1);
+    assert_eq!(
+        parsed.to_string(),
+        msg,
+        "Display must emit the original address form so the EIP-191 hash matches what the signer signed"
+    );
+}
+
+#[test]
+fn roundtrip_preserves_unchecksummed_uppercase_address() {
+    let msg = "service.org wants you to sign in with your Ethereum account:\n\
+0x4A62316623AD457F02CDC5D997DED67A383EC569\n\
+\n\
+Test\n\
+\n\
+URI: https://service.org/login\n\
+Version: 1\n\
+Chain ID: 1\n\
+Nonce: abcd1234efgh5678\n\
+Issued At: 2026-01-01T00:00:00Z";
+    let parsed = Message::from_str(msg).unwrap();
+    assert_eq!(parsed.warnings.len(), 1);
+    assert_eq!(parsed.to_string(), msg);
+}
+
+#[test]
+fn verify_unchecksummed_lowercase_address() {
+    // Signature produced by deterministic key [7u8; 32] over the lowercase-address
+    // message below. Regression guard for https://… (v0.8.0 accepted the message
+    // with a warning but always failed verification because Display re-serialized
+    // the address as EIP-55 checksummed before hashing.)
+    let msg = "service.org wants you to sign in with your Ethereum account:\n\
+0x4a62316623ad457f02cdc5d997ded67a383ec569\n\
+\n\
+I accept the ServiceOrg Terms of Service: https://service.org/tos\n\
+\n\
+URI: https://service.org/login\n\
+Version: 1\n\
+Chain ID: 1\n\
+Nonce: abcd1234efgh5678\n\
+Issued At: 2026-01-01T00:00:00Z";
+    let parsed = Message::from_str(msg).unwrap();
+    let signature = <[u8; 65]>::from_hex(
+        "6932b553cfca65ddf9419a642bd314544b6bc74a84af3fc540b81c18c8b9d8823b2c7ae6853ed5b70da9d14a44a5dba2a32b3ed5635a64b4b57a590e174cf6461b",
+    )
+    .unwrap();
+    parsed.verify_eip191(&signature).expect("verification must succeed for unchecksummed-address message");
+}
+
+#[test]
 fn reject_non_empty_separator_lines() {
     let base = |sep_after_addr: &str, sep_after_stmt: &str| {
         format!(

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1
+
+### Fixed
+
+- **Signature verification for unchecksummed addresses** — In 0.8.0, messages whose address was all-lowercase or all-uppercase parsed with a warning but silently failed verification: `verify_eip191` hashes the output of `Display`, which always re-serialized the address in EIP-55 checksum form, so the EIP-191 hash no longer matched what the signer had signed. `Display` now preserves the original address form so that signatures over uniform-case messages verify correctly.
+
+### Breaking Changes
+
+- **Added `address_raw` field to `Message`** — `Message` gains a `address_raw: Option<String>` field that stores the raw address hex (without `0x`) as it appeared in the parsed message, when the input was not EIP-55 checksummed. `Display` emits this string verbatim when `Some`, and falls back to the computed EIP-55 form when `None`. Code constructing `Message` values directly must provide this field (use `None` for checksummed addresses). `PartialEq` includes this field because it affects serialization and therefore signature hashing.
+
 ## 0.8.0
 
 ### Breaking Changes
