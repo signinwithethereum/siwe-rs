@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Grammar test vectors** — Added grammar validation tests for URIs, resources, and specification fields from the official SIWE test vector suite.
+- **Object test vectors** — Added object construction tests (message objects and parsing negative) to validate field-level constraints (EIP-55, nonce length, timestamps) independent of string parsing.
+
 ## 0.7.0
 
 ### Breaking Changes

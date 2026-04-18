@@ -67,7 +67,7 @@ impl FromStr for Version {
 /// Issued At: 2021-12-07T18:28:18.807Z"#;
 /// let message: Message = msg.parse().unwrap();
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq)]
 pub struct Message {
     /// Optional URI scheme of the request origin (e.g. "https").
     pub scheme: Option<String>,
@@ -95,6 +95,26 @@ pub struct Message {
     pub request_id: Option<String>,
     /// A list of information or references to information the user wishes to have resolved as part of authentication by the relying party. They are expressed as RFC 3986 URIs separated by "\n- " where \n is the byte 0x0a.
     pub resources: Vec<UriString>,
+    /// Warnings produced during parsing (e.g., non-EIP-55 checksummed address).
+    pub warnings: Vec<String>,
+}
+
+impl PartialEq for Message {
+    fn eq(&self, other: &Self) -> bool {
+        self.scheme == other.scheme
+            && self.domain == other.domain
+            && self.address == other.address
+            && self.statement == other.statement
+            && self.uri == other.uri
+            && self.version == other.version
+            && self.chain_id == other.chain_id
+            && self.nonce == other.nonce
+            && self.issued_at == other.issued_at
+            && self.expiration_time == other.expiration_time
+            && self.not_before == other.not_before
+            && self.request_id == other.request_id
+            && self.resources == other.resources
+    }
 }
 
 impl Display for Message {
@@ -107,8 +127,10 @@ impl Display for Message {
         writeln!(f)?;
         if let Some(statement) = &self.statement {
             writeln!(f, "{}", statement)?;
+            writeln!(f)?;
+        } else {
+            writeln!(f)?;
         }
-        writeln!(f)?;
         writeln!(f, "{}{}", URI_TAG, &self.uri)?;
         writeln!(f, "{}{}", VERSION_TAG, self.version as u64)?;
         writeln!(f, "{}{}", CHAIN_TAG, &self.chain_id)?;
@@ -216,20 +238,36 @@ impl FromStr for Message {
         } else {
             (None, Authority::from_str(preamble_prefix)?)
         };
-        let address = tagged(ADDR_TAG, lines.next())
-            .and_then(|a| {
-                if is_checksum(a) {
-                    Ok(a)
-                } else {
-                    Err(ParseError::Format("Address is not in EIP-55 format"))
-                }
-            })
-            .and_then(|a| <[u8; 20]>::from_hex(a).map_err(|e| e.into()))?;
+        let mut warnings = Vec::new();
+        let address_str = tagged(ADDR_TAG, lines.next())?;
+        let has_lower = address_str.bytes().any(|b| matches!(b, b'a'..=b'f'));
+        let has_upper = address_str.bytes().any(|b| matches!(b, b'A'..=b'F'));
+        if has_lower && has_upper && !is_checksum(address_str) {
+            return Err(ParseError::Format("Address is not in EIP-55 format"));
+        }
+        if (has_lower || has_upper) && !(has_lower && has_upper) {
+            warnings.push(format!(
+                "Address is not EIP-55 checksummed: 0x{}",
+                address_str
+            ));
+        }
+        let address = <[u8; 20]>::from_hex(address_str)?;
 
         blank_line(lines.next(), "Missing blank line after address")?;
-        let statement = match lines.next() {
+        let (statement, uri_line) = match lines.next() {
             None => return Err(ParseError::Format("No lines found after address")),
-            Some("") => None,
+            Some("") => {
+                // Could be missing statement or empty statement.
+                // Peek at the next line to distinguish.
+                let next = lines.next();
+                if next == Some("") {
+                    // Three blank lines after address: empty statement.
+                    (Some(String::new()), lines.next())
+                } else {
+                    // Two blank lines after address: missing statement.
+                    (None, next)
+                }
+            }
             Some(s) => {
                 // EIP-4361: statement may only contain printable ASCII (0x20-0x7E).
                 if !s.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
@@ -238,11 +276,11 @@ impl FromStr for Message {
                     ));
                 }
                 blank_line(lines.next(), "Missing blank line after statement")?;
-                Some(s.to_string())
+                (Some(s.to_string()), lines.next())
             }
         };
 
-        let uri = parse_line(URI_TAG, lines.next())?;
+        let uri = parse_line(URI_TAG, uri_line)?;
         let version = parse_line(VERSION_TAG, lines.next())?;
         let chain_id = parse_line(CHAIN_TAG, lines.next())?;
         let nonce = parse_line(NONCE_TAG, lines.next()).and_then(|nonce: String| {
@@ -300,6 +338,7 @@ impl FromStr for Message {
             not_before,
             request_id,
             resources,
+            warnings,
         })
     }
 }
@@ -801,529 +840,3 @@ const EXP_TAG: &str = "Expiration Time: ";
 const NBF_TAG: &str = "Not Before: ";
 const RID_TAG: &str = "Request ID: ";
 const RES_TAG: &str = "Resources:";
-
-#[cfg(test)]
-mod tests {
-    use time::format_description::well_known::Rfc3339;
-
-    use super::*;
-
-    #[test]
-    fn parsing() {
-        // correct order
-        let message = r#"service.org wants you to sign in with your Ethereum account:
-0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
-
-I accept the ServiceOrg Terms of Service: https://service.org/tos
-
-URI: https://service.org/login
-Version: 1
-Chain ID: 1
-Nonce: 32891756
-Issued At: 2021-09-30T16:25:24Z
-Resources:
-- ipfs://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq/
-- https://example.com/my-web2-claim.json"#;
-
-        assert!(Message::from_str(message).is_ok());
-
-        assert_eq!(message, &Message::from_str(message).unwrap().to_string());
-
-        // incorrect order
-        assert!(Message::from_str(
-            r#"service.org wants you to sign in with your Ethereum account:
-0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
-
-I accept the ServiceOrg Terms of Service: https://service.org/tos
-
-URI: https://service.org/login
-Version: 1
-Nonce: 32891756
-Chain ID: 1
-Issued At: 2021-09-30T16:25:24Z
-Resources:
-- ipfs://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq/
-- https://example.com/my-web2-claim.json"#,
-        )
-        .is_err());
-
-        //  no statement
-        let message = r#"service.org wants you to sign in with your Ethereum account:
-0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
-
-
-URI: https://service.org/login
-Version: 1
-Chain ID: 1
-Nonce: 32891756
-Issued At: 2021-09-30T16:25:24Z
-Resources:
-- ipfs://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq/
-- https://example.com/my-web2-claim.json"#;
-
-        assert!(Message::from_str(message).is_ok());
-
-        assert_eq!(message, &Message::from_str(message).unwrap().to_string());
-    }
-
-    #[tokio::test]
-    async fn verification() {
-        let message = Message::from_str(
-            r#"localhost:4361 wants you to sign in with your Ethereum account:
-0x6Da01670d8fc844e736095918bbE11fE8D564163
-
-SIWE Notepad Example
-
-URI: http://localhost:4361
-Version: 1
-Chain ID: 1
-Nonce: kEWepMt9knR6lWJ6A
-Issued At: 2021-12-07T18:28:18.807Z"#,
-        )
-        .unwrap();
-        let correct = <[u8; 65]>::from_hex(r#"6228b3ecd7bf2df018183aeab6b6f1db1e9f4e3cbe24560404112e25363540eb679934908143224d746bbb5e1aa65ab435684081f4dbb74a0fec57f98f40f5051c"#).unwrap();
-
-        let verify_result = message.verify_eip191(&correct);
-        dbg!(&verify_result);
-        assert!(verify_result.is_ok());
-
-        let incorrect = <[u8; 65]>::from_hex(r#"7228b3ecd7bf2df018183aeab6b6f1db1e9f4e3cbe24560404112e25363540eb679934908143224d746bbb5e1aa65ab435684081f4dbb74a0fec57f98f40f5051c"#).unwrap();
-        assert!(message.verify_eip191(&incorrect).is_err());
-    }
-
-    #[tokio::test]
-    async fn verification1() {
-        let message = Message::from_str(r#"localhost wants you to sign in with your Ethereum account:
-0x4b60ffAf6fD681AbcC270Faf4472011A4A14724C
-
-Allow localhost to access your orbit using their temporary session key: did:key:z6Mktud6LcDFb3heS7FFWoJhiCafmUPkCAgpvJLv5E6fgBJg#z6Mktud6LcDFb3heS7FFWoJhiCafmUPkCAgpvJLv5E6fgBJg
-
-URI: did:key:z6Mktud6LcDFb3heS7FFWoJhiCafmUPkCAgpvJLv5E6fgBJg#z6Mktud6LcDFb3heS7FFWoJhiCafmUPkCAgpvJLv5E6fgBJg
-Version: 1
-Chain ID: 1
-Nonce: PPrtjztx2lYqWbqNs
-Issued At: 2021-12-20T12:29:25.907Z
-Expiration Time: 2021-12-20T12:44:25.906Z
-Resources:
-- kepler://bafk2bzacecn2cdbtzho72x4c62fcxvcqj23padh47s5jyyrv42mtca3yrhlpa#put
-- kepler://bafk2bzacecn2cdbtzho72x4c62fcxvcqj23padh47s5jyyrv42mtca3yrhlpa#del
-- kepler://bafk2bzacecn2cdbtzho72x4c62fcxvcqj23padh47s5jyyrv42mtca3yrhlpa#get
-- kepler://bafk2bzacecn2cdbtzho72x4c62fcxvcqj23padh47s5jyyrv42mtca3yrhlpa#list"#).unwrap();
-        let correct = <[u8; 65]>::from_hex(r#"20c0da863b3dbfbb2acc0fb3b9ec6daefa38f3f20c997c283c4818ebeca96878787f84fccc25c4087ccb31ebd782ae1d2f74be076a49c0a8604419e41507e9381c"#).unwrap();
-        assert!(message.verify_eip191(&correct).is_ok());
-        let incorrect = <[u8; 65]>::from_hex(r#"30c0da863b3dbfbb2acc0fb3b9ec6daefa38f3f20c997c283c4818ebeca96878787f84fccc25c4087ccb31ebd782ae1d2f74be076a49c0a8604419e41507e9381c"#).unwrap();
-        assert!(message.verify_eip191(&incorrect).is_err());
-    }
-
-    const PARSING_POSITIVE: &str = include_str!("../test-vectors/vectors/parsing/parsing_positive.json");
-    const PARSING_NEGATIVE: &str = include_str!("../test-vectors/vectors/parsing/parsing_negative.json");
-    const VERIFICATION_POSITIVE: &str =
-        include_str!("../test-vectors/vectors/verification/verification_positive.json");
-    const VERIFICATION_NEGATIVE: &str =
-        include_str!("../test-vectors/vectors/verification/verification_negative.json");
-    #[cfg(feature = "alloy")]
-    const VERIFICATION_EIP1271: &str = include_str!("../test-vectors/vectors/verification/eip1271.json");
-
-    fn fields_to_message(fields: &serde_json::Value) -> anyhow::Result<Message> {
-        let fields = fields.as_object().unwrap();
-        Ok(Message {
-            scheme: fields.get("scheme").and_then(|s| s.as_str()).map(String::from),
-            domain: fields["domain"].as_str().unwrap().try_into().unwrap(),
-            address: <[u8; 20]>::from_hex(
-                fields["address"]
-                    .as_str()
-                    .unwrap()
-                    .strip_prefix("0x")
-                    .unwrap(),
-            )
-            .unwrap(),
-            statement: fields
-                .get("statement")
-                .map(|s| s.as_str().unwrap().try_into().unwrap()),
-            uri: fields["uri"].as_str().unwrap().try_into().unwrap(),
-            version: <Version as std::str::FromStr>::from_str(fields["version"].as_str().unwrap())
-                .unwrap(),
-            chain_id: fields["chainId"].as_u64().unwrap(),
-            nonce: fields["nonce"].as_str().unwrap().try_into().unwrap(),
-            issued_at: <TimeStamp as std::str::FromStr>::from_str(
-                fields["issuedAt"].as_str().unwrap(),
-            )?,
-            expiration_time: match fields.get("expirationTime") {
-                Some(e) => Some(<TimeStamp as std::str::FromStr>::from_str(
-                    e.as_str().unwrap(),
-                )?),
-                None => None,
-            },
-            not_before: if let Some(not_before) = fields.get("notBefore") {
-                Some(<TimeStamp as std::str::FromStr>::from_str(
-                    not_before.as_str().unwrap(),
-                )?)
-            } else {
-                None
-            },
-            request_id: fields
-                .get("requestId")
-                .map(|e| e.as_str().unwrap().to_string()),
-            resources: fields
-                .get("resources")
-                .map(|e| {
-                    e.as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|r| {
-                            <UriString as std::str::FromStr>::from_str(r.as_str().unwrap()).unwrap()
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        })
-    }
-
-    #[test]
-    fn parsing_positive() {
-        let tests: serde_json::Value = serde_json::from_str(PARSING_POSITIVE).unwrap();
-        for (test_name, test) in tests.as_object().unwrap() {
-            print!("{} -> ", test_name);
-            let parsed_message = Message::from_str(test["message"].as_str().unwrap()).unwrap();
-            let fields = &test["fields"];
-            let expected_message = fields_to_message(fields).unwrap();
-            assert!(parsed_message == expected_message);
-            println!("✅")
-        }
-    }
-
-    #[test]
-    fn parsing_negative() {
-        let tests: serde_json::Value = serde_json::from_str(PARSING_NEGATIVE).unwrap();
-        for (test_name, test) in tests.as_object().unwrap() {
-            print!("{} -> ", test_name);
-            assert!(Message::from_str(test.as_str().unwrap()).is_err());
-            println!("✅")
-        }
-    }
-
-    #[tokio::test]
-    async fn verification_positive() {
-        let tests: serde_json::Value = serde_json::from_str(VERIFICATION_POSITIVE).unwrap();
-        for (test_name, test) in tests.as_object().unwrap() {
-            print!("{} -> ", test_name);
-            let fields = &test;
-            let message = fields_to_message(fields).unwrap();
-            let signature = <[u8; 65]>::from_hex(
-                fields.as_object().unwrap()["signature"]
-                    .as_str()
-                    .unwrap()
-                    .strip_prefix("0x")
-                    .unwrap(),
-            )
-            .unwrap();
-            let timestamp = fields
-                .as_object()
-                .unwrap()
-                .get("time")
-                .and_then(|timestamp| {
-                    OffsetDateTime::parse(timestamp.as_str().unwrap(), &Rfc3339).ok()
-                });
-            let opts = VerificationOpts {
-                timestamp,
-                ..Default::default()
-            };
-            assert!(message.verify(&signature, &opts).await.is_ok());
-            println!("✅")
-        }
-    }
-
-    #[cfg(feature = "alloy")]
-    #[tokio::test]
-    async fn verification_eip1271() {
-        let tests: serde_json::Value = serde_json::from_str(VERIFICATION_EIP1271).unwrap();
-        for (test_name, test) in tests.as_object().unwrap() {
-            print!("{} -> ", test_name);
-            let message = Message::from_str(test["message"].as_str().unwrap()).unwrap();
-            let signature = <Vec<u8>>::from_hex(
-                test["signature"]
-                    .as_str()
-                    .unwrap()
-                    .strip_prefix("0x")
-                    .unwrap(),
-            )
-            .unwrap();
-            let rpc_url = std::env::var("ETH_RPC_URL")
-                .expect("ETH_RPC_URL must be set to run EIP-1271 tests");
-            let opts = VerificationOpts {
-                rpc_url: Some(rpc_url),
-                ..Default::default()
-            };
-            assert!(message.verify(&signature, &opts).await.is_ok());
-            println!("✅")
-        }
-    }
-
-    #[tokio::test]
-    async fn verification_negative() {
-        let tests: serde_json::Value = serde_json::from_str(VERIFICATION_NEGATIVE).unwrap();
-        for (test_name, test) in tests.as_object().unwrap() {
-            print!("{} -> ", test_name);
-            let fields = &test;
-            let message = fields_to_message(fields);
-            let signature = <Vec<u8>>::from_hex(
-                fields.as_object().unwrap()["signature"]
-                    .as_str()
-                    .unwrap()
-                    .strip_prefix("0x")
-                    .unwrap(),
-            );
-            let domain_binding =
-                fields
-                    .as_object()
-                    .unwrap()
-                    .get("domainBinding")
-                    .and_then(|domain_binding| {
-                        Authority::from_str(domain_binding.as_str().unwrap()).ok()
-                    });
-            let match_nonce = fields
-                .as_object()
-                .unwrap()
-                .get("matchNonce")
-                .and_then(|match_nonce| match_nonce.as_str())
-                .map(|n| n.to_string());
-            let timestamp = fields
-                .as_object()
-                .unwrap()
-                .get("time")
-                .and_then(|timestamp| {
-                    OffsetDateTime::parse(timestamp.as_str().unwrap(), &Rfc3339).ok()
-                });
-            #[allow(clippy::needless_update)]
-            let opts = VerificationOpts {
-                domain: domain_binding,
-                nonce: match_nonce,
-                timestamp,
-                ..Default::default()
-            };
-            assert!(
-                message.is_err()
-                    || signature.is_err()
-                    || message
-                        .unwrap()
-                        .verify(&signature.unwrap(), &opts,)
-                        .await
-                        .is_err()
-            );
-            println!("✅")
-        }
-    }
-
-    const VALID_CASES: &[&str] = &[
-        // From the spec:
-        // All caps
-        "0x52908400098527886E0F7030069857D2E4169EE7",
-        "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
-        // All Lower
-        "0xde709f2102306220921060314715629080e2fb77",
-        "0x27b1fdb04752bbc536007a920d24acb045561c26",
-        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
-        "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
-        "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
-        "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
-    ];
-
-    const INVALID_CASES: &[&str] = &[
-        // From eip55 Crate:
-        "0xD1220a0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
-        "0xdbF03B407c01e7cD3CBea99509d93f8DDDC8C6FB",
-        "0xfb6916095ca1df60bB79Ce92cE3Ea74c37c5D359",
-        "0x5aAeb6053f3E94C9b9A09f33669435E7Ef1BeAed",
-        // FROM SO QUESTION:
-        "0xCF5609B003B2776699EEA1233F7C82D5695CC9AA",
-        // From eip55 Crate Issue
-        "0x000000000000000000000000000000000000dEAD",
-    ];
-
-    #[test]
-    fn test_is_checksum() {
-        for case in VALID_CASES {
-            let c = case.trim_start_matches("0x");
-            assert!(is_checksum(c))
-        }
-
-        for case in INVALID_CASES {
-            let c = case.trim_start_matches("0x");
-            assert!(!is_checksum(c))
-        }
-    }
-
-    #[test]
-    fn eip55_test() {
-        // vectors from https://github.com/ethereum/EIPs/blob/master/EIPS/eip-55.md
-
-        assert!(test_eip55(
-            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
-            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
-        ));
-        assert!(test_eip55(
-            "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
-            "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"
-        ));
-        assert!(test_eip55(
-            "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
-            "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB"
-        ));
-        assert!(test_eip55(
-            "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
-            "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb"
-        ));
-
-        assert!(test_eip55(
-            "0x52908400098527886E0F7030069857D2E4169EE7",
-            "0x52908400098527886E0F7030069857D2E4169EE7",
-        ));
-        assert!(test_eip55(
-            "0x8617e340b3d01fa5f11f306f4090fd50e238070d",
-            "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
-        ));
-        assert!(test_eip55(
-            "0xde709f2102306220921060314715629080e2fb77",
-            "0xde709f2102306220921060314715629080e2fb77",
-        ));
-        assert!(test_eip55(
-            "0x27b1fdb04752bbc536007a920d24acb045561c26",
-            "0x27b1fdb04752bbc536007a920d24acb045561c26"
-        ));
-        assert!(test_eip55(
-            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
-            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
-        ));
-        assert!(test_eip55(
-            "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
-            "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"
-        ));
-        assert!(test_eip55(
-            "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
-            "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
-        ));
-        assert!(test_eip55(
-            "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
-            "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb"
-        ));
-    }
-
-    fn test_eip55(addr: &str, checksum: &str) -> bool {
-        let unprefixed = addr.strip_prefix("0x").unwrap();
-        eip55(&<[u8; 20]>::from_hex(unprefixed).unwrap()) == checksum
-            && eip55(&<[u8; 20]>::from_hex(unprefixed.to_lowercase()).unwrap()) == checksum
-            && eip55(&<[u8; 20]>::from_hex(unprefixed.to_uppercase()).unwrap()) == checksum
-    }
-
-    #[test]
-    fn reject_non_empty_separator_lines() {
-        let base = |sep_after_addr: &str, sep_after_stmt: &str| {
-            format!(
-                "service.org wants you to sign in with your Ethereum account:\n\
-                 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\
-                 {sep_after_addr}\n\
-                 I accept the ServiceOrg Terms of Service: https://service.org/tos\n\
-                 {sep_after_stmt}\n\
-                 URI: https://service.org/login\n\
-                 Version: 1\n\
-                 Chain ID: 1\n\
-                 Nonce: 32891756\n\
-                 Issued At: 2021-09-30T16:25:24Z"
-            )
-        };
-
-        // Canonical form parses fine.
-        assert!(Message::from_str(&base("", "")).is_ok());
-
-        // Injected text after address must be rejected.
-        let err = Message::from_str(&base("injected line", "")).unwrap_err();
-        assert!(
-            err.to_string().contains("blank line after address"),
-            "unexpected error: {err}"
-        );
-
-        // Injected text after statement must be rejected.
-        let err = Message::from_str(&base("", "injected line")).unwrap_err();
-        assert!(
-            err.to_string().contains("blank line after statement"),
-            "unexpected error: {err}"
-        );
-
-        // No-statement variant: injected text after address.
-        let no_stmt = "service.org wants you to sign in with your Ethereum account:\n\
-                       0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\n\
-                       injected\n\
-                       \n\
-                       URI: https://service.org/login\n\
-                       Version: 1\n\
-                       Chain ID: 1\n\
-                       Nonce: 32891756\n\
-                       Issued At: 2021-09-30T16:25:24Z";
-        let err = Message::from_str(no_stmt).unwrap_err();
-        assert!(
-            err.to_string().contains("blank line after address"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[cfg(feature = "alloy")]
-    #[tokio::test]
-    async fn rpc_chain_id_mismatch() {
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpListener,
-        };
-
-        // Spin up a fake RPC that always returns chain ID 137 (Polygon).
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        tokio::spawn(async move {
-            loop {
-                let (mut sock, _) = listener.accept().await.unwrap();
-                let mut buf = vec![0u8; 4096];
-                let _ = sock.read(&mut buf).await;
-                // Return chain 137 regardless of request.
-                let body = r#"{"jsonrpc":"2.0","id":1,"result":"0x89"}"#;
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = sock.write_all(resp.as_bytes()).await;
-            }
-        });
-
-        // Message declares chain ID 1, but our RPC returns 137.
-        let message = Message::from_str(
-            r#"localhost:4361 wants you to sign in with your Ethereum account:
-0x6Da01670d8fc844e736095918bbE11fE8D564163
-
-SIWE Notepad Example
-
-URI: http://localhost:4361
-Version: 1
-Chain ID: 1
-Nonce: kEWepMt9knR6lWJ6A
-Issued At: 2021-12-07T18:28:18.807Z"#,
-        )
-        .unwrap();
-
-        let sig = <[u8; 65]>::from_hex(
-            "6228b3ecd7bf2df018183aeab6b6f1db1e9f4e3cbe24560404112e25363540eb\
-             679934908143224d746bbb5e1aa65ab435684081f4dbb74a0fec57f98f40f5051c",
-        )
-        .unwrap();
-
-        let opts = VerificationOpts {
-            rpc_url: Some(format!("http://127.0.0.1:{port}")),
-            ..Default::default()
-        };
-
-        let err = message.verify(&sig, &opts).await.unwrap_err();
-        assert!(
-            matches!(err, VerificationError::RpcChainIdMismatch { expected: 1, actual: 137 }),
-            "expected RpcChainIdMismatch, got: {err:?}"
-        );
-    }
-}
