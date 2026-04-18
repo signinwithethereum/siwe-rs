@@ -169,10 +169,10 @@ Issued At: 2021-12-07T18:28:18.807Z"#;
 cargo test
 ```
 
-To run tests that require on-chain verification (EIP-1271 / EIP-6492), enable the `alloy` feature and provide an Ethereum mainnet RPC URL:
+Tests that require on-chain verification (EIP-1271 / EIP-6492) are marked `#[ignore]` and must be run explicitly with the `alloy` feature and an Ethereum mainnet RPC URL:
 
 ```bash
-ETH_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" cargo test --features alloy
+ETH_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY" cargo test --features alloy -- --ignored
 ```
 
 ## Migrating from `siwe`

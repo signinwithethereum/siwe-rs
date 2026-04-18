@@ -305,6 +305,7 @@ async fn verification_positive() {
 
 #[cfg(feature = "alloy")]
 #[tokio::test]
+#[ignore = "requires ETH_RPC_URL env var and network access"]
 async fn verification_eip1271() {
     let tests: serde_json::Value = serde_json::from_str(VERIFICATION_EIP1271).unwrap();
     for (test_name, test) in tests.as_object().unwrap() {
