@@ -5,7 +5,7 @@ This crate provides a pure Rust implementation of [EIP-4361: Sign In With Ethere
 ## Installation
 
 ```toml
-signinwithethereum = "0.7"
+signinwithethereum = "0.8"
 ```
 
 ### Features
@@ -183,7 +183,7 @@ This crate is the actively maintained successor to the [`siwe`](https://crates.i
 
 ```diff
 - siwe = "0.6"
-+ signinwithethereum = "0.7"
++ signinwithethereum = "0.8"
 ```
 
 ### Code changes
@@ -199,7 +199,7 @@ If you used the `ethers` feature for EIP-1271 contract wallet verification, swit
 
 ```diff
 - siwe = { version = "0.6", features = ["ethers"] }
-+ signinwithethereum = { version = "0.7", features = ["alloy"] }
++ signinwithethereum = { version = "0.8", features = ["alloy"] }
 ```
 
 And replace the provider in `VerificationOpts`:
