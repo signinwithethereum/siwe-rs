@@ -2,10 +2,27 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- **Added `warnings` field to `Message`** — The `Message` struct now includes `warnings: Vec<String>` to carry parsing warnings (e.g., non-EIP-55 checksummed addresses). Code constructing `Message` values directly will need to provide this field. The `PartialEq` implementation excludes `warnings` from equality checks, so two messages differing only in warnings are considered equal.
+
+### Changed
+
+- **Unchecksummed addresses now accepted with warning** — All-lowercase and all-uppercase Ethereum addresses are now accepted during parsing (with a warning in `Message::warnings`), matching the TypeScript reference implementation. Mixed-case addresses with an invalid checksum are still rejected. Previously, all non-checksummed addresses were rejected.
+- **Empty statements now distinguished from missing** — The parser now correctly handles the three statement states defined by EIP-4361: present (`Some("text")`), empty (`Some("")`), and missing (`None`). Previously, empty and missing were conflated.
+
 ### Added
 
 - **Grammar test vectors** — Added grammar validation tests for URIs, resources, and specification fields from the official SIWE test vector suite.
 - **Object test vectors** — Added object construction tests (message objects and parsing negative) to validate field-level constraints (EIP-55, nonce length, timestamps) independent of string parsing.
+- **Parsing warning test vectors** — Added tests for EIP-55 address warning behavior (all-lowercase, all-uppercase).
+
+## 0.7.1
+
+### Fixed
+
+- **Cross-chain contract-wallet verification** — Fixed EIP-1271/EIP-6492 verification when the message's chain ID differs from the RPC endpoint. The RPC chain ID is now validated against the message before any on-chain calls.
+- **Blank line injection** — The parser now enforces that separator lines between the address, statement, and URI fields are truly blank. Non-empty lines in separator positions are rejected.
 
 ## 0.7.0
 

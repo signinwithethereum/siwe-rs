@@ -73,7 +73,7 @@ pub struct Message {
     pub scheme: Option<String>,
     /// The RFC 3986 authority that is requesting the signing.
     pub domain: Authority,
-    /// The Ethereum address performing the signing conformant to capitalization encoded checksum specified in EIP-55 where applicable.
+    /// The Ethereum address performing the signing. Parsed addresses must be EIP-55 checksummed or uniform-case (all-lowercase/all-uppercase); unchecksummed addresses produce a warning.
     pub address: [u8; 20],
     /// A human-readable ASCII assertion that the user will sign, and it must not contain '\n' (the byte 0x0a).
     pub statement: Option<String>,

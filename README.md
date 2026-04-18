@@ -30,7 +30,7 @@ let message: Message = msg.parse().unwrap();
 
 The parser validates:
 
-- EIP-55 checksummed address
+- EIP-55 checksummed address (unchecksummed all-lowercase/all-uppercase addresses are accepted with a warning in `message.warnings`)
 - Alphanumeric nonce (minimum 8 characters)
 - RFC 3339 timestamps
 - RFC 3986 URI and domain
@@ -212,13 +212,14 @@ And replace the provider in `VerificationOpts`:
   };
 ```
 
-The `Message` struct now has a `scheme: Option<String>` field. If you construct `Message` values directly (rather than parsing), add it:
+The `Message` struct now has `scheme: Option<String>` and `warnings: Vec<String>` fields. If you construct `Message` values directly (rather than parsing), add them:
 
 ```diff
   let msg = Message {
 +     scheme: None,
       domain: "example.com".parse().unwrap(),
       // ...
++     warnings: vec![],
   };
 ```
 
