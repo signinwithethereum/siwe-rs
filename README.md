@@ -127,6 +127,8 @@ Provide an RPC URL in the verification options. The verification order follows t
 2. **EOA** -- try standard `ecrecover` for 65-byte signatures
 3. **EIP-1271** -- fall back to on-chain `isValidSignature` if EOA verification fails
 
+Note: this is verification only. EIP-6492 allows a verifier to optionally submit the factory transaction after a successful check to finalize on-chain deployment ("side-effectful" verification). This library does not do that — if you need the wallet actually deployed, submit the factory call yourself.
+
 ## Example
 
 ```rust
